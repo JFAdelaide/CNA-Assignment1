@@ -122,7 +122,7 @@ while True:
     # ~~~~ END CODE INSERT ~~~~
     cacheFile.close()
     print ('Sent to the client:')
-    print ('> ' + cacheData)
+    print ('> ' + ''.join(cacheData))
   except:
     # cache miss.  Get resource from origin server
     originServerSocket = None
@@ -172,11 +172,37 @@ while True:
       # Get the response from the origin server
       # ~~~~ INSERT CODE ~~~~
       response = b""
+      headers_received = False
+      content_length = None
+      bytes_received = 0
+
       while True:
         data = originServerSocket.recv(BUFFER_SIZE)
-        if not data:
+        if not data:  # Connection closed by server
           break
         response += data
+
+        # Parse headers if not yet received
+        if not headers_received and b'\r\n\r\n' in response:
+          headers_end = response.index(b'\r\n\r\n') + 4
+          headers = response[:headers_end].decode('utf-8', errors='ignore')
+          headers_received = True
+
+          # Look for Content-Length
+          for line in headers.split('\r\n'):
+            if line.lower().startswith('content-length:'):
+              content_length = int(line.split(':')[1].strip())
+              break
+
+        # If we have Content-Length and headers, check if we've received all data
+        if headers_received and content_length is not None:
+          bytes_received = len(response) - headers_end
+          if bytes_received >= content_length:
+            break
+
+      # If no Content-Length and headers received, assume response is complete
+      if headers_received and content_length is None:
+        break
       # ~~~~ END CODE INSERT ~~~~
 
       # Send the response to the client
