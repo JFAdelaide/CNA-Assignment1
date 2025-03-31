@@ -111,13 +111,19 @@ while True:
     cacheMetaLocation = cacheLocation + '.meta'
 
     print ('Cache location:\t\t' + cacheLocation)
-
-    fileExists = os.path.isfile(cacheLocation)
     
-    # Check wether the file is currently in the cache
+    # Check expiration if metadata exists
+    if os.path.isfile(cacheMetaLocation):
+      with open(cacheMetaLocation, 'r') as metaFile:
+        expiration_time = float(metaFile.read().strip())
+      current_time = time.time()
+      if current_time >= expiration_time:
+        print ('Cache expired at ' + time.ctime(expiration_time) + ', fetching new copy')
+        raise FileNotFoundError  # Expired, fetch from origin
+      
+    # If not expired, proceed with cache hit - treat as non-expiring
     cacheFile = open(cacheLocation, "r")
     cacheData = cacheFile.readlines()
-
     print ('Cache hit! Loading from cache file: ' + cacheLocation)
     # ProxyServer finds a cache hit
     # Send back response to client 
@@ -127,6 +133,7 @@ while True:
     cacheFile.close()
     print ('Sent to the client:')
     print ('> ' + ''.join(cacheData))
+
   except:
     # cache miss.  Get resource from origin server
     originServerSocket = None
@@ -225,6 +232,22 @@ while True:
       
       should_cache = True
       max_age = None
+      expires = None
+
+      # Parse Cache-Control: max-age if present
+      for line in headers.split('\r\n'):
+          if line.lower().startswith('cache-control:'):
+              cache_control = line.split(':', 1)[1].strip()
+              match = re.search(r'max-age=(\d+)', cache_control, re.IGNORECASE)
+              if match:
+                  max_age = int(match.group(1))
+          elif line.lower().startswith('expires:'):
+              expires_str = line.split(':', 1)[1].strip()
+              try:
+                  expires = time.mktime(time.strptime(expires_str, '%a, %d %b %Y %H:%M:%S GMT'))
+              except ValueError:
+                  print('Invalid Expires header format, ignoring')
+                  expires = None
 
       # Handle 301 - Permanent Redirect (Cached for 24 hours)
       if status_code == '301':
@@ -264,7 +287,12 @@ while True:
         print ('cache file closed')
 
         # Save expiration time to metadata file
-        if max_age is not None:
+        if expires is not None:
+            expiration_time = expires
+            with open(cacheMetaLocation, 'w') as metaFile:
+                metaFile.write(str(expiration_time))
+            print ('Cached with expiration at ' + time.ctime(expiration_time))
+        elif max_age is not None:
             expiration_time = time.time() + max_age
             with open(cacheMetaLocation, 'w') as metaFile:
                 metaFile.write(str(expiration_time))
