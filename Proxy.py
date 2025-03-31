@@ -106,6 +106,9 @@ while True:
     cacheLocation = './' + hostname + resource
     if cacheLocation.endswith('/'):
         cacheLocation = cacheLocation + 'default'
+    
+    # Add metadata file for expiration tracking
+    cacheMetaLocation = cacheLocation + '.meta'
 
     print ('Cache location:\t\t' + cacheLocation)
 
@@ -209,20 +212,41 @@ while True:
       # Send the response to the client
       # ~~~~ INSERT CODE ~~~~
       clientSocket.sendall(response)
-      # ~~~~ END CODE INSERT ~~~~
 
-      # Handle redirects and Cache-Control
-      response_str = response.decode('utf-8', errors='ignore')
-      status_line = response_str.split('\r\n')[0]
+      # Handle Status Code and Cache-Control
+      # Split response for header modification
+      headers_end = response.index(b'\r\n\r\n') + 4
+      headers = response[:headers_end].decode('utf-8', errors='ignore')
+      body = response[headers_end:]
+
+      # Extract status code from headers
+      status_line = headers.split('\r\n')[0]
       status_code = status_line.split()[1]
       
       should_cache = True
       max_age = None
 
-      # Handle 301 and 302 redirects
-      if status_code in ['301', '302']:
+      # Handle 301 - Permanent Redirect (Cached for 24 hours)
+      if status_code == '301':
+        max_age = 86400
+      
+      # Handle 302 - Temporary Redirect (Cached for 1 hour)
+      if status_code == '302':
+        max_age = 3600
+      
+      # Handle 404 - Not Found (Not Cached)
+      if status_code == '404':
         should_cache = False
-        print(f"Received {status_code} redirect")
+
+      # Add Cache-Control header if max_age is set
+      if max_age is not None:
+          cache_control_line = f'Cache-Control: max-age={max_age}\r\n'
+          if 'Cache-Control:' not in headers:
+              headers = headers.rstrip('\r\n') + '\r\n' + cache_control_line
+          else:
+              headers = re.sub(r'Cache-Control:.*\r\n', cache_control_line, headers)
+          response = headers.encode('utf-8') + body
+      # ~~~~ END CODE INSERT ~~~~
 
       if should_cache:
         # Create a new file in the cache for the requested file.
@@ -238,6 +262,13 @@ while True:
         # ~~~~ END CODE INSERT ~~~~
         cacheFile.close()
         print ('cache file closed')
+
+        # Save expiration time to metadata file
+        if max_age is not None:
+            expiration_time = time.time() + max_age
+            with open(cacheMetaLocation, 'w') as metaFile:
+                metaFile.write(str(expiration_time))
+            print ('Cached with expiration at ' + time.ctime(expiration_time))
 
       # finished communicating with origin server - shutdown socket writes
       print ('origin response received. Closing sockets')
