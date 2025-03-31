@@ -112,27 +112,25 @@ while True:
 
     print ('Cache location:\t\t' + cacheLocation)
     
-    # Check expiration if metadata exists
-    if os.path.isfile(cacheMetaLocation):
-      with open(cacheMetaLocation, 'r') as metaFile:
-        expiration_time = float(metaFile.read().strip())
-      current_time = time.time()
-      if current_time >= expiration_time:
-        print ('Cache expired at ' + time.ctime(expiration_time) + ', fetching new copy')
-        raise FileNotFoundError  # Expired, fetch from origin
+    # Check if the cached file exists
+    if os.path.isfile(cacheLocation):
+      # Check expiration only if metadata exists
+      if os.path.isfile(cacheMetaLocation):
+        with open(cacheMetaLocation, 'r') as metaFile:
+          expiration_time = float(metaFile.read().strip())
+        current_time = time.time()
+        if current_time >= expiration_time:
+          print ('Cache expired at ' + time.ctime(expiration_time) + ', fetching new copy')
+          raise FileNotFoundError  # Expired, fetch from origin
       
-    # If not expired, proceed with cache hit - treat as non-expiring
-    cacheFile = open(cacheLocation, "r")
-    cacheData = cacheFile.readlines()
-    print ('Cache hit! Loading from cache file: ' + cacheLocation)
-    # ProxyServer finds a cache hit
-    # Send back response to client 
-    # ~~~~ INSERT CODE ~~~~
-    clientSocket.sendall(''.join(cacheData).encode('utf-8'))
-    # ~~~~ END CODE INSERT ~~~~
-    cacheFile.close()
-    print ('Sent to the client:')
-    print ('> ' + ''.join(cacheData))
+      # Read full response (headers + body) as bytes
+      with open(cacheLocation, "rb") as cacheFile:
+        fullResponse = cacheFile.read()
+      print ('Cache hit! Loading from cache file: ' + cacheLocation)
+      clientSocket.sendall(fullResponse)
+      print ('Sent full response to client')
+    else:
+      raise FileNotFoundError  # Cache miss
 
   except:
     # cache miss.  Get resource from origin server
@@ -288,15 +286,50 @@ while True:
 
         # Save expiration time to metadata file
         if expires is not None:
-            expiration_time = expires
-            with open(cacheMetaLocation, 'w') as metaFile:
-                metaFile.write(str(expiration_time))
-            print ('Cached with expiration at ' + time.ctime(expiration_time))
+          expiration_time = expires
+          with open(cacheMetaLocation, 'w') as metaFile:
+            metaFile.write(str(expiration_time))
+          print ('Cached with expiration at ' + time.ctime(expiration_time))
         elif max_age is not None:
-            expiration_time = time.time() + max_age
-            with open(cacheMetaLocation, 'w') as metaFile:
-                metaFile.write(str(expiration_time))
-            print ('Cached with expiration at ' + time.ctime(expiration_time))
+          expiration_time = time.time() + max_age
+          with open(cacheMetaLocation, 'w') as metaFile:
+            metaFile.write(str(expiration_time))
+          print ('Cached with expiration at ' + time.ctime(expiration_time))
+
+      # Pre-fetching for HTML resources
+      if 'text/html' in headers.lower():
+          print('Detected HTML, attempting pre-fetch')
+          body_str = body.decode('utf-8', errors='ignore')
+          links = re.findall(r'(?:href|src)=["\'](.*?)["\']', body_str)
+          print(f'Found {len(links)} links: {links}')
+          for link in links:
+              if link and not link.startswith(('http://', 'https://', '//', '#')):
+                  resource_path = link if link.startswith('/') else '/' + link
+                  prefetch_location = './' + hostname + resource_path
+                  if prefetch_location.endswith('/'):
+                      prefetch_location += 'default'
+                  if not os.path.isfile(prefetch_location):
+                      try:
+                          print(f'Fetching {resource_path}')
+                          prefetch_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                          prefetch_socket.settimeout(5)  # 5-second timeout
+                          prefetch_socket.connect((socket.gethostbyname(hostname), 80))
+                          prefetch_socket.sendall(f"GET {resource_path} HTTP/1.1\r\nHost: {hostname}\r\nConnection: close\r\n\r\n".encode())
+                          prefetch_response = b""
+                          while True:
+                              data = prefetch_socket.recv(BUFFER_SIZE)
+                              if not data:
+                                  break
+                              prefetch_response += data
+                          prefetch_socket.close()
+                          os.makedirs(os.path.dirname(prefetch_location), exist_ok=True)
+                          with open(prefetch_location, 'wb') as f:
+                              f.write(prefetch_response)
+                          print(f'Prefetched: {prefetch_location}')
+                      except Exception as e:
+                          print(f'Failed to prefetch {resource_path}: {e}')
+                  else:
+                      print(f'Skipped prefetching {resource_path}: already cached')
 
       # finished communicating with origin server - shutdown socket writes
       print ('origin response received. Closing sockets')
