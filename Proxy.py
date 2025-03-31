@@ -4,6 +4,7 @@ import sys
 import os
 import argparse
 import re
+import time
 
 # 1MB buffer size
 BUFFER_SIZE = 1000000
@@ -210,19 +211,33 @@ while True:
       clientSocket.sendall(response)
       # ~~~~ END CODE INSERT ~~~~
 
-      # Create a new file in the cache for the requested file.
-      cacheDir, file = os.path.split(cacheLocation)
-      print ('cached directory ' + cacheDir)
-      if not os.path.exists(cacheDir):
-        os.makedirs(cacheDir)
-      cacheFile = open(cacheLocation, 'wb')
+      # Handle redirects and Cache-Control
+      response_str = response.decode('utf-8', errors='ignore')
+      status_line = response_str.split('\r\n')[0]
+      status_code = status_line.split()[1]
+      
+      should_cache = True
+      max_age = None
 
-      # Save origin server response in the cache file
-      # ~~~~ INSERT CODE ~~~~
-      cacheFile.write(response)
-      # ~~~~ END CODE INSERT ~~~~
-      cacheFile.close()
-      print ('cache file closed')
+      # Handle 301 and 302 redirects
+      if status_code in ['301', '302']:
+        should_cache = False
+        print(f"Received {status_code} redirect")
+
+      if should_cache:
+        # Create a new file in the cache for the requested file.
+        cacheDir, file = os.path.split(cacheLocation)
+        print ('cached directory ' + cacheDir)
+        if not os.path.exists(cacheDir):
+          os.makedirs(cacheDir)
+        cacheFile = open(cacheLocation, 'wb')
+
+        # Save origin server response in the cache file
+        # ~~~~ INSERT CODE ~~~~
+        cacheFile.write(response)
+        # ~~~~ END CODE INSERT ~~~~
+        cacheFile.close()
+        print ('cache file closed')
 
       # finished communicating with origin server - shutdown socket writes
       print ('origin response received. Closing sockets')
