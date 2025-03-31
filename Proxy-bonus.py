@@ -90,16 +90,30 @@ while True:
   # Remove parent directory changes - security
   URI = URI.replace('/..', '')
 
-  # Split hostname from resource name
+  # Split hostname (with optional port) from resource name
   resourceParts = URI.split('/', 1)
-  hostname = resourceParts[0]
+  hostPart = resourceParts[0]
   resource = '/'
+
+  # Check if port is specified in the hostPart
+  if ':' in hostPart:
+    hostname, port_str = hostPart.split(':', 1)
+    try:
+      port = int(port_str)
+    except ValueError:
+      print(f"Invalid port number '{port_str}', defaulting to 80")
+      port = 80
+  else:
+    hostname = hostPart
+    port = 80  # Default HTTP port
 
   if len(resourceParts) == 2:
     # Resource is absolute URI with hostname and resource
     resource = resource + resourceParts[1]
 
-  print ('Requested Resource:\t' + resource)
+  print('Requested Resource:\t' + resource)
+  print('Hostname:\t\t' + hostname)
+  print('Port:\t\t\t' + str(port))
 
   # Check if resource is in cache
   try:
@@ -145,11 +159,10 @@ while True:
     try:
       # Get the IP address for a hostname
       address = socket.gethostbyname(hostname)
-      # Connect to the origin server
-      # ~~~~ INSERT CODE ~~~~
-      originServerSocket.connect((address, 80))
-      # ~~~~ END CODE INSERT ~~~~
-      print ('Connected to origin Server')
+
+      # Connect to the origin server using the specified port
+      originServerSocket.connect((address, port))  # Changed from 80 to port
+      print(f'Connected to origin server at {hostname}:{port}')
 
       originServerRequest = ''
       originServerRequestHeader = ''
@@ -298,38 +311,38 @@ while True:
 
       # Pre-fetching for HTML resources
       if 'text/html' in headers.lower():
-          print('Detected HTML, attempting pre-fetch')
-          body_str = body.decode('utf-8', errors='ignore')
-          links = re.findall(r'(?:href|src)=["\'](.*?)["\']', body_str)
-          print(f'Found {len(links)} links: {links}')
-          for link in links:
-              if link and not link.startswith(('http://', 'https://', '//', '#')):
-                  resource_path = link if link.startswith('/') else '/' + link
-                  prefetch_location = './' + hostname + resource_path
-                  if prefetch_location.endswith('/'):
-                      prefetch_location += 'default'
-                  if not os.path.isfile(prefetch_location):
-                      try:
-                          print(f'Fetching {resource_path}')
-                          prefetch_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                          prefetch_socket.settimeout(5)  # 5-second timeout
-                          prefetch_socket.connect((socket.gethostbyname(hostname), 80))
-                          prefetch_socket.sendall(f"GET {resource_path} HTTP/1.1\r\nHost: {hostname}\r\nConnection: close\r\n\r\n".encode())
-                          prefetch_response = b""
-                          while True:
-                              data = prefetch_socket.recv(BUFFER_SIZE)
-                              if not data:
-                                  break
-                              prefetch_response += data
-                          prefetch_socket.close()
-                          os.makedirs(os.path.dirname(prefetch_location), exist_ok=True)
-                          with open(prefetch_location, 'wb') as f:
-                              f.write(prefetch_response)
-                          print(f'Prefetched: {prefetch_location}')
-                      except Exception as e:
-                          print(f'Failed to prefetch {resource_path}: {e}')
-                  else:
-                      print(f'Skipped prefetching {resource_path}: already cached')
+        print('Detected HTML, attempting pre-fetch')
+        body_str = body.decode('utf-8', errors='ignore')
+        links = re.findall(r'(?:href|src)=["\'](.*?)["\']', body_str)
+        print(f'Found {len(links)} links: {links}')
+        for link in links:
+          if link and not link.startswith(('http://', 'https://', '//', '#')):
+            resource_path = link if link.startswith('/') else '/' + link
+            prefetch_location = './' + hostname + resource_path
+            if prefetch_location.endswith('/'):
+              prefetch_location += 'default'
+            if not os.path.isfile(prefetch_location):
+              try:
+                print(f'Fetching {resource_path}')
+                prefetch_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                prefetch_socket.settimeout(5)  # 5-second timeout
+                prefetch_socket.connect((socket.gethostbyname(hostname), port))  # Use parsed port
+                prefetch_socket.sendall(f"GET {resource_path} HTTP/1.1\r\nHost: {hostname}\r\nConnection: close\r\n\r\n".encode())
+                prefetch_response = b""
+                while True:
+                  data = prefetch_socket.recv(BUFFER_SIZE)
+                  if not data:
+                    break
+                  prefetch_response += data
+                prefetch_socket.close()
+                os.makedirs(os.path.dirname(prefetch_location), exist_ok=True)
+                with open(prefetch_location, 'wb') as f:
+                  f.write(prefetch_response)
+                print(f'Prefetched: {prefetch_location}')
+              except Exception as e:
+                print(f'Failed to prefetch {resource_path}: {e}')
+              else:
+                print(f'Skipped prefetching {resource_path}: already cached')
 
       # finished communicating with origin server - shutdown socket writes
       print ('origin response received. Closing sockets')
